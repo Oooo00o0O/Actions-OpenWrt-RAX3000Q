@@ -1,20 +1,4 @@
 #!/bin/bash
-#
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# File name: diy-part2.sh
-# Description: OpenWrt DIY script part 2 (After Update feeds)
-#
-
-#
-# RAX3000Q/QY custom build
-# QSDK 11.5 / Linux 5.4
-# NSS + UA2F + UA3F + SQM/CAKE
-#
 
 set -euo pipefail
 
@@ -22,21 +6,76 @@ echo "========================================="
 echo " Add UA2F v5.2.0"
 echo "========================================="
 
-# 删除 ImmortalWrt 21.02 feed 自带的旧 UA2F
+# 删除 ImmortalWrt feed 里面的旧 UA2F
 rm -rf package/feeds/packages/ua2f
 rm -rf feeds/packages/net/ua2f
 rm -rf package/UA2F
 
-# v5.2.0 是 tag；--branch 同样可以用于 tag
 git clone \
     --depth 1 \
     --branch v5.2.0 \
     https://github.com/Zxilly/UA2F.git \
     package/UA2F
 
-# UA2F v5.2.0 tag 中 OpenWrt Makefile 的版本号仍写成 4.10.2。
-# 不影响实际源码，但这里修正包版本显示。
-sed -i 's/^PKG_VERSION:=4\.10\.2$/PKG_VERSION:=5.2.0/' \
+
+# ----------------------------------------------------------
+# UA2F / OpenWrt 21.02 compatibility fixes
+# ----------------------------------------------------------
+
+# 1. OpenWrt 21.02 使用 CMake 3.19.x
+#    CMP0135 是 CMake 3.24 才加入的。
+#    给这个 policy 加版本存在性检查。
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("package/UA2F/CMakeLists.txt")
+s = p.read_text()
+
+old = "cmake_policy(SET CMP0135 NEW)"
+new = """if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()"""
+
+if old not in s:
+    raise SystemExit("UA2F: CMP0135 line not found")
+
+s = s.replace(old, new, 1)
+p.write_text(s)
+PY
+
+
+# 2. GitHub Actions 自动设置 CI=true。
+#    UA2F 会因此强制打开 code coverage。
+#    固件交叉编译不需要 coverage，关闭它。
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("package/UA2F/CMakeLists.txt")
+s = p.read_text()
+
+old = "if(DEFINED ENV{CI})"
+new = "if(FALSE) # OpenWrt cross build: disable CI coverage"
+
+if old not in s:
+    raise SystemExit("UA2F: CI coverage condition not found")
+
+s = s.replace(old, new, 1)
+p.write_text(s)
+PY
+
+
+# 3. v5.2.0 tag 中 OpenWrt package 版本号仍可能显示 4.10.2
+#    只影响 ipk 显示版本，不影响源码。
+sed -i \
+    's/^PKG_VERSION:=4\.10\.2$/PKG_VERSION:=5.2.0/' \
+    package/UA2F/openwrt/Makefile
+
+
+# 4. 当前固件明确使用 fw3 + iptables，
+#    OpenWrt 21.02 没有我们不需要的 nft TPROXY package。
+#    去掉 nft-only dependency warning。
+sed -i \
+    '/kmod-nft-tproxy/d; /kmod-nft-queue/d' \
     package/UA2F/openwrt/Makefile
 
 
@@ -54,12 +93,8 @@ git clone \
 
 
 echo "========================================="
-echo " Modify OpenWrt configuration"
+echo " Modify OpenWrt config"
 echo "========================================="
-
-# ----------------------------------------------------------
-# 修改 .config 的辅助函数
-# ----------------------------------------------------------
 
 cfg_y() {
     local key="$1"
@@ -91,32 +126,22 @@ cfg_n() {
 cfg_y CONFIG_PACKAGE_ua2f
 cfg_y CONFIG_PACKAGE_ua3f
 
+# libbacktrace 只是 debug 功能，第一版关闭
+cfg_n CONFIG_UA2F_ENABLE_LIBBACKTRACE
+
 
 # ==========================================================
-# iproute2
-#
-# UA2F 5.2.0 明确依赖 ip-full
-# 不再使用 ip-tiny
+# iproute2 / ipset
 # ==========================================================
 
 cfg_y CONFIG_PACKAGE_ip-full
 cfg_n CONFIG_PACKAGE_ip-tiny
 
-
-# ==========================================================
-# ipset
-#
-# UA3F 明确依赖
-# ==========================================================
-
 cfg_y CONFIG_PACKAGE_ipset
 
 
 # ==========================================================
-# iptables / Netfilter
-#
-# 继续使用 firewall3 + iptables
-# 不切 nftables/firewall4
+# firewall3 + iptables
 # ==========================================================
 
 cfg_y CONFIG_PACKAGE_iptables
@@ -127,17 +152,15 @@ cfg_y CONFIG_PACKAGE_iptables-mod-ipopt
 cfg_y CONFIG_PACKAGE_iptables-mod-nfqueue
 cfg_y CONFIG_PACKAGE_iptables-mod-tproxy
 
-# NFQUEUE userspace/kernel support
 cfg_y CONFIG_PACKAGE_kmod-nfnetlink-queue
 cfg_y CONFIG_PACKAGE_libnetfilter-queue
 
-# UA2F 要求的 conntrack netlink。
-# kkstone 原本就已经开启，再明确保留。
+# UA2F conntrack listener / CONNMARK
 cfg_y CONFIG_PACKAGE_kmod-nf-conntrack-netlink
 
 
 # ==========================================================
-# 禁止切到 nftables
+# 不切 firewall4 / nftables
 # ==========================================================
 
 cfg_n CONFIG_PACKAGE_nftables-json
@@ -146,58 +169,52 @@ cfg_n CONFIG_IPTABLES_NFTABLES
 
 
 # ==========================================================
-# Traffic Control / SQM / CAKE
+# SQM / CAKE
 # ==========================================================
 
-# 完整 tc，而不是 tiny 版本
 cfg_y CONFIG_PACKAGE_tc-full
 cfg_n CONFIG_PACKAGE_tc-tiny
 
-# Linux traffic scheduler
 cfg_y CONFIG_PACKAGE_kmod-sched
-
-# CAKE
+cfg_y CONFIG_PACKAGE_kmod-sched-core
 cfg_y CONFIG_PACKAGE_kmod-sched-cake
-
-# conntrack mark -> tc
 cfg_y CONFIG_PACKAGE_kmod-sched-connmark
 cfg_y CONFIG_PACKAGE_kmod-sched-ctinfo
 
-# SQM
+cfg_y CONFIG_PACKAGE_kmod-ifb
+
 cfg_y CONFIG_PACKAGE_sqm-scripts
 cfg_y CONFIG_PACKAGE_luci-app-sqm
 
 
 # ==========================================================
-# NSS qdisc
-#
-# 第一版明确不开。
-# NSS NAT/ECM 保持 kkstone 原配置；
-# Linux CAKE/SQM 先作为独立的数据路径测试。
+# NSS qdisc 第一版不启用
 # ==========================================================
 
 cfg_n CONFIG_PACKAGE_kmod-qca-nss-drv-qdisc
 
 
-# ==========================================================
-# 强制刷新 package metadata
-#
-# 因为 UA2F / UA3F 是在 feeds install 之后才加入 package/
-# ==========================================================
-
+# 新增 package 后强制 OpenWrt 重建 metadata
 rm -rf tmp
 
 
 echo "========================================="
-echo " Custom packages installed:"
+echo " Versions"
 echo "========================================="
 
-echo "UA2F:"
+echo -n "UA2F: "
 git -C package/UA2F describe --tags --always
 
-echo "UA3F:"
+echo -n "UA3F: "
 git -C package/UA3F describe --tags --always
 
 echo
-echo "Configuration will be resolved by: make defconfig"
-echo "========================================="
+echo "UA2F CMake compatibility patch:"
+grep -A3 -B1 'POLICY CMP0135' package/UA2F/CMakeLists.txt
+
+echo
+echo "UA2F coverage:"
+grep -A3 -B1 'OpenWrt cross build' package/UA2F/CMakeLists.txt
+
+echo
+echo "Done."
