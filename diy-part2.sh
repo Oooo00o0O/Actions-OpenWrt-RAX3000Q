@@ -80,16 +80,12 @@ sed -i \
 
 
 echo "========================================="
-echo " Add UA3F v3.6.0"
+echo " Configure Anti-Sharing (UA2F)"
 echo "========================================="
 
 rm -rf package/UA3F
-
-git clone \
-    --depth 1 \
-    --branch v3.6.0 \
-    https://github.com/SunBK201/UA3F.git \
-    package/UA3F
+# RAX3000Q 双核 A7 架构性能与内存敏感，实测主力采用轻量 C 语言的 UA2F (占用仅 ~2.4MB)
+# UA3F (Go 编写) 存在 musl 1.1 与 内存墙问题，默认不编译 UA3F
 
 
 echo "========================================="
@@ -120,14 +116,24 @@ cfg_n() {
 
 
 # ==========================================================
-# UA2F / UA3F
+# UA2F
 # ==========================================================
 
 cfg_y CONFIG_PACKAGE_ua2f
-cfg_y CONFIG_PACKAGE_ua3f
+cfg_n CONFIG_PACKAGE_ua3f
 
 # libbacktrace 只是 debug 功能，第一版关闭
 cfg_n CONFIG_UA2F_ENABLE_LIBBACKTRACE
+
+
+# ==========================================================
+# curl (校园网自动认证守护 portal-autologin 必需依赖)
+# ==========================================================
+
+cfg_y CONFIG_PACKAGE_curl
+cfg_y CONFIG_PACKAGE_libcurl
+cfg_y CONFIG_PACKAGE_libnghttp2
+cfg_y CONFIG_PACKAGE_ca-bundle
 
 
 # ==========================================================
@@ -197,6 +203,12 @@ cfg_n CONFIG_PACKAGE_kmod-qca-nss-drv-qdisc
 # 新增 package 后强制 OpenWrt 重建 metadata
 rm -rf tmp
 
+if [ -d "files" ]; then
+    chmod +x files/etc/uci-defaults/* 2>/dev/null || true
+    chmod +x files/etc/hotplug.d/iface/* 2>/dev/null || true
+    chmod +x files/usr/bin/* 2>/dev/null || true
+fi
+
 
 echo "========================================="
 echo " Versions"
@@ -205,8 +217,10 @@ echo "========================================="
 echo -n "UA2F: "
 git -C package/UA2F describe --tags --always
 
-echo -n "UA3F: "
-git -C package/UA3F describe --tags --always
+if [ -d "package/UA3F" ]; then
+    echo -n "UA3F: "
+    git -C package/UA3F describe --tags --always
+fi
 
 echo
 echo "UA2F CMake compatibility patch:"

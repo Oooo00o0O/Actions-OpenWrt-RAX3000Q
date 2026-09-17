@@ -1,0 +1,134 @@
+#!/bin/sh
+
+# 1. WAN 基础与防检测拟态
+uci set network.wan.hostname='*'
+uci set network.wan.mtu='1492'
+uci set network.wan.peerdns='0'
+uci -q delete network.wan.dns
+uci add_list network.wan.dns='8.8.8.8'
+uci add_list network.wan.dns='223.6.6.6'
+uci add_list network.wan.dns='119.28.28.28'
+uci set network.wan.ipv6='0'
+uci set network.wan.delegate='0'
+
+# 动态生成合法的本地管理随机 MAC (拟态移动终端随机 MAC，确保每台量产机器独一无二绝不冲突)
+CUR_MAC=$(uci -q get network.wan.macaddr)
+if [ -z "$CUR_MAC" ] || [ "$CUR_MAC" = "00:11:22:33:44:55" ]; then
+    RAND_HEX=$(hexdump -n 3 -e '/1 ":%02x"' /dev/urandom 2>/dev/null)
+    [ -n "$RAND_HEX" ] && {
+        GEN_MAC="9a:bc:0d${RAND_HEX}"
+        uci set network.wan.macaddr="$GEN_MAC"
+    }
+fi
+
+uci -q delete network.eth0
+uci set network.eth0=device
+uci set network.eth0.name='eth0'
+uci set network.eth0.mtu='1492'
+
+uci set network.wan6.auto='0'
+uci set network.lan.ip6assign='0'
+uci set network.lan.delegate='0'
+uci commit network
+
+# 2. DHCP 与 DNS 拦截 / IPv6 屏蔽
+uci set dhcp.@dnsmasq[0].filter_aaaa='1'
+uci set dhcp.lan.dhcpv6='disabled'
+uci set dhcp.lan.ra='disabled'
+uci set dhcp.lan.ndp='disabled'
+uci commit dhcp
+
+# 3. 防火墙原生重定向 (DNS/NTP 劫持) 与 UA2F 规则链自启
+uci -q delete firewall.dns_redirect
+uci set firewall.dns_redirect=redirect
+uci set firewall.dns_redirect.name='Intercept-DNS'
+uci set firewall.dns_redirect.src='lan'
+uci set firewall.dns_redirect.proto='tcp udp'
+uci set firewall.dns_redirect.src_dport='53'
+uci set firewall.dns_redirect.dest_port='53'
+uci set firewall.dns_redirect.target='DNAT'
+
+uci -q delete firewall.ntp_redirect
+uci set firewall.ntp_redirect=redirect
+uci set firewall.ntp_redirect.name='Intercept-NTP'
+uci set firewall.ntp_redirect.src='lan'
+uci set firewall.ntp_redirect.proto='udp'
+uci set firewall.ntp_redirect.src_dport='123'
+uci set firewall.ntp_redirect.dest_port='123'
+uci set firewall.ntp_redirect.target='DNAT'
+
+uci -q delete firewall.ua2f
+uci set firewall.ua2f=include
+uci set firewall.ua2f.type='script'
+uci set firewall.ua2f.path='/var/etc/ua2f.include'
+uci set firewall.ua2f.reload='1'
+
+uci -q del_list firewall.@zone[1].network='wan6'
+uci commit firewall
+
+# 4. UA2F 默认启用与移动端真实 UA 拟态池
+# 覆盖全球最主流的真实安卓移动浏览器 (官方 Firefox for Android 与 Google 官方 Reduced Chrome/Edge Mobile)
+# 格式 100% 真实合法，长短自然不一 (68~126字节)，开机随机抽取其一锁定，与出网 TTL=63 (移动端) 达到全协议栈完美自洽
+UA_1="Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0"
+UA_2="Mozilla/5.0 (Android 13; Mobile; rv:127.0) Gecko/127.0 Firefox/127.0"
+UA_3="Mozilla/5.0 (Android 13; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0"
+UA_4="Mozilla/5.0 (Android 12; Mobile; rv:115.0) Gecko/115.0 Firefox/115.0"
+UA_5="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+UA_6="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36"
+UA_7="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+UA_8="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
+UA_9="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36 EdgA/127.0.0.0"
+UA_10="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 EdgA/124.0.0.0"
+
+R_IDX=$(awk 'BEGIN{srand(); print int(rand()*10)+1}')
+eval "SEL_UA=\$UA_${R_IDX}"
+[ -z "$SEL_UA" ] && SEL_UA="$UA_1"
+
+uci set ua2f.enabled.enabled='1'
+uci set ua2f.firewall.handle_fw='1'
+uci set ua2f.firewall.handle_tls='0'
+uci set ua2f.firewall.handle_intranet='1'
+uci set ua2f.main.mode='NFQUEUE'
+uci set ua2f.main.listen_port='10010'
+uci set ua2f.main.nfqueue_workers='2'
+uci set ua2f.main.custom_ua="$SEL_UA"
+uci set ua2f.main.disable_connmark='0'
+uci commit ua2f
+
+# 5. WiFi 默认配置
+# 5.1 开启 5GHz 满血 Wi-Fi 6 (非 DFS 信道 44 免雷达等待，默认 SSID: Nwrt_5G，默认密码: password)
+uci set wireless.radio1.channel='44'
+uci set wireless.radio1.disabled='0'
+uci set wireless.default_radio1.ssid='Nwrt_5G'
+uci set wireless.default_radio1.encryption='sae-mixed'
+uci set wireless.default_radio1.key='password'
+uci set wireless.default_radio1.disabled='0'
+
+# 5.2 彻底禁用 2.4GHz Wi-Fi (降温、降低功耗、减少杂波干扰)
+uci set wireless.radio0.disabled='1'
+uci set wireless.default_radio0.disabled='1'
+uci commit wireless
+
+# 6. 内核 SYN 重传次数优化 (防晚高峰 TCP 内存墙)
+grep -q "tcp_syn_retries" /etc/sysctl.conf 2>/dev/null || {
+    echo "net.ipv4.tcp_syn_retries = 4" >> /etc/sysctl.conf
+}
+
+# 7. 自动登录定时任务
+mkdir -p /etc/crontabs
+grep -q "portal-autologin.sh" /etc/crontabs/root 2>/dev/null || {
+    echo "*/2 * * * * /usr/bin/portal-autologin.sh" >> /etc/crontabs/root
+}
+
+# 8. 默认语言强制设为简体中文
+uci set luci.main.lang='zh_cn'
+uci commit luci
+
+# 9. 开启全局多核网络软中断负载均衡 (RPS)
+uci set network.globals.packet_steering='1'
+uci commit network
+
+# 10. 预置系统默认管理员密码为 password (WebUI 与 SSH 统一)
+echo "root:password" | chpasswd 2>/dev/null || (echo -e "password\npassword" | passwd root 2>/dev/null) || true
+
+exit 0

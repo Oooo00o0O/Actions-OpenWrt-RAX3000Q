@@ -1,0 +1,9 @@
+# Put your custom commands here that should be executed once
+# the system init finished. By default this file does nothing.
+
+# 启用多核网络软中断负载均衡 (RPS 双核并行处理)
+for dev in eth0 eth1 br-lan wlan1; do
+    [ -f /sys/class/net/$dev/queues/rx-0/rps_cpus ] && echo 3 > /sys/class/net/$dev/queues/rx-0/rps_cpus 2>/dev/null || true
+done
+
+exit 0

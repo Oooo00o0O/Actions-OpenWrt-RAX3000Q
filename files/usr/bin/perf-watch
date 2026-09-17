@@ -1,0 +1,175 @@
+#!/bin/sh
+# NWRT 全维度实时硬件与网络性能监视器
+# 用法: perf-watch [刷新秒数] [运行次数]
+# 示例: perf-watch          (交互式持续刷新，Ctrl+C 退出)
+#       perf-watch 1 5      (采样 5 次后自动退出)
+
+INTERVAL="${1:-1}"
+MAX_COUNT="${2:-0}"
+COUNT=0
+
+trap 'printf "\033[?25h\033[0m\n"; exit 0' INT TERM
+
+[ -t 1 ] && printf '\033[?25l' # 终端环境下隐藏光标
+
+get_cpu_stat() {
+    awk '
+    /^cpu / {
+        u=$2+$3+$4; s=$5; io=$6; irq=$7+$8; tot=0;
+        for(i=2;i<=8;i++) tot+=$i;
+        print tot, $5, $2+$3, $4, $7+$8;
+    }' /proc/stat
+}
+
+get_core_stat() {
+    core="$1"
+    awk -v c="cpu$core" '$1==c {
+        tot=0; for(i=2;i<=8;i++) tot+=$i;
+        print tot, $5;
+    }' /proc/stat
+}
+
+get_dev_bytes() {
+    dev="$1"
+    awk -v d="$dev:" '$1==d {print $2, $10}' /proc/net/dev
+}
+
+# 初始采样
+c_all0=$(get_cpu_stat)
+c0_0=$(get_core_stat 0)
+c1_0=$(get_core_stat 1)
+w_net0=$(get_dev_bytes eth0)
+wifi_net0=$(get_dev_bytes wlan1)
+
+while true; do
+    sleep "$INTERVAL"
+    c_all1=$(get_cpu_stat)
+    c0_1=$(get_core_stat 0)
+    c1_1=$(get_core_stat 1)
+    w_net1=$(get_dev_bytes eth0)
+    wifi_net1=$(get_dev_bytes wlan1)
+    
+    # 整体 CPU
+    tot_diff=$(($(echo $c_all1 | awk '{print $1}') - $(echo $c_all0 | awk '{print $1}')))
+    idle_diff=$(($(echo $c_all1 | awk '{print $2}') - $(echo $c_all0 | awk '{print $2}')))
+    usr_diff=$(($(echo $c_all1 | awk '{print $3}') - $(echo $c_all0 | awk '{print $3}')))
+    sys_diff=$(($(echo $c_all1 | awk '{print $4}') - $(echo $c_all0 | awk '{print $4}')))
+    irq_diff=$(($(echo $c_all1 | awk '{print $5}') - $(echo $c_all0 | awk '{print $5}')))
+    
+    cpu_util=0; [ "$tot_diff" -gt 0 ] && cpu_util=$(( 100 - idle_diff * 100 / tot_diff ))
+    cpu_usr=0;  [ "$tot_diff" -gt 0 ] && cpu_usr=$(( usr_diff * 100 / tot_diff ))
+    cpu_sys=0;  [ "$tot_diff" -gt 0 ] && cpu_sys=$(( sys_diff * 100 / tot_diff ))
+    cpu_irq=0;  [ "$tot_diff" -gt 0 ] && cpu_irq=$(( irq_diff * 100 / tot_diff ))
+    
+    # 双核各自
+    c0_tot_d=$(($(echo $c0_1 | awk '{print $1}') - $(echo $c0_0 | awk '{print $1}')))
+    c0_idl_d=$(($(echo $c0_1 | awk '{print $2}') - $(echo $c0_0 | awk '{print $2}')))
+    c0_util=0; [ "$c0_tot_d" -gt 0 ] && c0_util=$(( 100 - c0_idl_d * 100 / c0_tot_d ))
+    
+    c1_tot_d=$(($(echo $c1_1 | awk '{print $1}') - $(echo $c1_0 | awk '{print $1}')))
+    c1_idl_d=$(($(echo $c1_1 | awk '{print $2}') - $(echo $c1_0 | awk '{print $2}')))
+    c1_util=0; [ "$c1_tot_d" -gt 0 ] && c1_util=$(( 100 - c1_idl_d * 100 / c1_tot_d ))
+    
+    # WAN (eth0)
+    wan_rx_d=$(($(echo $w_net1 | awk '{print $1}') - $(echo $w_net0 | awk '{print $1}')))
+    wan_tx_d=$(($(echo $w_net1 | awk '{print $2}') - $(echo $w_net0 | awk '{print $2}')))
+    wan_rx_mbps=$(awk -v b="$wan_rx_d" -v iv="$INTERVAL" 'BEGIN{printf "%.1f", b*8/(iv*1000000)}')
+    wan_tx_mbps=$(awk -v b="$wan_tx_d" -v iv="$INTERVAL" 'BEGIN{printf "%.1f", b*8/(iv*1000000)}')
+    
+    # Wi-Fi 5G (wlan1)
+    wifi_rx_d=$(($(echo $wifi_net1 | awk '{print $1}') - $(echo $wifi_net0 | awk '{print $1}')))
+    wifi_tx_d=$(($(echo $wifi_net1 | awk '{print $2}') - $(echo $wifi_net0 | awk '{print $2}')))
+    wifi_rx_mbps=$(awk -v b="$wifi_rx_d" -v iv="$INTERVAL" 'BEGIN{printf "%.1f", b*8/(iv*1000000)}')
+    wifi_tx_mbps=$(awk -v b="$wifi_tx_d" -v iv="$INTERVAL" 'BEGIN{printf "%.1f", b*8/(iv*1000000)}')
+    
+    c_all0=$c_all1; c0_0=$c0_1; c1_0=$c1_1; w_net0=$w_net1; wifi_net0=$wifi_net1
+    
+    # RAM & Swap
+    mem_info=$(awk '
+        /^MemTotal:/ {tot=$2}
+        /^MemFree:/ {free=$2}
+        /^Buffers:/ {buf=$2}
+        /^Cached:/ {cache=$2}
+        /^MemAvailable:/ {avail=$2}
+        /^SwapTotal:/ {stot=$2}
+        /^SwapFree:/ {sfree=$2}
+        END {
+            used = tot - free - buf - cache;
+            sused = stot - sfree;
+            printf "%d %d %d %d %d %d", tot/1024, used/1024, avail/1024, stot/1024, sused/1024, (tot-free-buf-cache)*100/tot;
+        }
+    ' /proc/meminfo)
+    mem_tot=$(echo $mem_info | awk '{print $1}')
+    mem_used=$(echo $mem_info | awk '{print $2}')
+    mem_avail=$(echo $mem_info | awk '{print $3}')
+    swap_tot=$(echo $mem_info | awk '{print $4}')
+    swap_used=$(echo $mem_info | awk '{print $5}')
+    mem_pct=$(echo $mem_info | awk '{print $6}')
+    
+    # 温度
+    temps=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | tr '\n' ' ')
+    t0=$(echo $temps | awk '{print $1}'); [ -z "$t0" ] && t0="N/A"
+    
+    # ECM NSS 加速流数
+    ecm_conn=$(cat /sys/kernel/debug/ecm/ecm_db/connection_count 2>/dev/null || echo 0)
+    
+    # 防火墙计数
+    ttl_pkts=$(iptables -t mangle -L POSTROUTING -v -n 2>/dev/null | awk '$6=="eth0" && $3=="TTL" {print $1}')
+    ua2f_pkts=$(iptables -t mangle -L POSTROUTING -v -n 2>/dev/null | awk '$3=="ua2f" {print $1}')
+    quic_pkts=$(iptables -L FORWARD -v -n 2>/dev/null | awk '$3=="DROP" && $4=="udp" {print $1}')
+    [ -z "$ttl_pkts" ] && ttl_pkts=0
+    [ -z "$ua2f_pkts" ] && ua2f_pkts=0
+    [ -z "$quic_pkts" ] && quic_pkts=0
+
+    # 绘制终端看板
+    [ -t 1 ] && printf '\033[H\033[J'
+    printf '===============================================================================\n'
+    printf '        CMCC RAX3000Q (IPQ5000 双核 A7) 实时全维度性能监控看板                 \n'
+    printf '===============================================================================\n'
+    printf ' 系统时间: %-8s   运行时间: %-12s   核心温度: %s°C   ECM硬件加速流: %s\n' \
+        "$(date '+%H:%M:%S')" "$(cut -d. -f1 /proc/uptime)s" "$t0" "$ecm_conn"
+    printf '-------------------------------------------------------------------------------\n'
+    printf ' [CPU 算力]   整体: %3d%% [usr:%2d%% sys:%2d%% softirq/irq:%2d%%]\n' \
+        "$cpu_util" "$cpu_usr" "$cpu_sys" "$cpu_irq"
+    printf '             核心0 (CPU0): %3d%%      核心1 (CPU1): %3d%%  (RPS双核并行加速)\n' \
+        "$c0_util" "$c1_util"
+    printf ' [内存状况]   物理RAM: %dM / %dM (可用: %dM, 占用: %d%%) | zram Swap: %dM (用:%dM)\n' \
+        "$mem_used" "$mem_tot" "$mem_avail" "$mem_pct" "$swap_tot" "$swap_used"
+    printf '-------------------------------------------------------------------------------\n'
+    printf ' [网络吞吐]   WAN 口 (eth0):   下行: %6s Mbps    上行: %6s Mbps\n' \
+        "$wan_rx_mbps" "$wan_tx_mbps"
+    printf '             Wi-Fi 5G (wlan1): 发射: %6s Mbps    接收: %6s Mbps\n' \
+        "$wifi_tx_mbps" "$wifi_rx_mbps"
+    printf ' [防共享统计] TTL64改写: %-8s  UA2F处理: %-8s  QUIC阻断: %-8s\n' \
+        "$ttl_pkts" "$ua2f_pkts" "$quic_pkts"
+    printf '-------------------------------------------------------------------------------\n'
+    printf ' [Wi-Fi 5G 关联终端物理协商列表] (信道 44, HE80)\n'
+    printf ' %-17s %-7s %-12s %-12s %-20s\n' "MAC 地址" "信号" "上行物理速率" "下行物理速率" "频宽与模式"
+    
+    iw dev wlan1 station dump 2>/dev/null | awk '
+        /^Station / {mac=$2}
+        /signal:/ {sig=$2 " " $3}
+        /rx bitrate:/ {
+            rx=""; for(i=3; i<=NF; i++) {
+                if ($i ~ /HE-/ || $i ~ /MHz/ || $i ~ /MCS/) break;
+                rx=rx $i;
+            }
+            mode=""; for(i=3; i<=NF; i++) {
+                if ($i ~ /MHz/ || $i ~ /MCS/ || $i ~ /HE-NSS/) mode=mode $i " ";
+            }
+        }
+        /tx bitrate:/ {
+            tx=""; for(i=3; i<=NF; i++) {
+                if ($i ~ /HE-/ || $i ~ /MHz/ || $i ~ /MCS/) break;
+                tx=tx $i;
+            }
+            printf " %-17s %-7s %-12s %-12s %-20s\n", mac, sig, rx, tx, mode;
+        }
+    ' | head -n 6
+    printf '===============================================================================\n'
+    
+    COUNT=$((COUNT + 1))
+    [ "$MAX_COUNT" -gt 0 ] && [ "$COUNT" -ge "$MAX_COUNT" ] && break
+done
+
+[ -t 1 ] && printf '\033[?25h\033[0m\n'

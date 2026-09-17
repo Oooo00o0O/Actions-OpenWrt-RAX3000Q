@@ -1,0 +1,45 @@
+#!/bin/sh
+# 快速配置校园网认证凭据
+# 用法: set-portal <手机号> <身份证后8位> [移动|电信|联通]
+# 示例: set-portal 13812345678 12345678 移动
+
+PHONE="$1"
+UID_VALUE="$2"
+SERVICE="${3:-chinaMobile}"
+
+if [ -z "$PHONE" ] || [ -z "$UID_VALUE" ]; then
+    echo "========================================================"
+    echo "用法: set-portal <手机号> <身份证后8位> [运营商]"
+    echo "运营商可选: 移动(chinaMobile) / 电信(chinaTelecom) / 联通(chinaUnicom)"
+    echo "示例: set-portal 13912345678 12345678 电信"
+    echo "========================================================"
+    exit 1
+fi
+
+case "$SERVICE" in
+    chinaMobile|移动)   SERVICE="chinaMobile" ;;
+    chinaTelecom|电信)  SERVICE="chinaTelecom" ;;
+    chinaUnicom|联通)   SERVICE="chinaUnicom" ;;
+    *)
+        echo "错误: 未知运营商 '$SERVICE'"
+        echo "支持列表: 移动(chinaMobile)、电信(chinaTelecom)、联通(chinaUnicom)"
+        exit 1
+        ;;
+esac
+
+CONF="/etc/portal-login.conf"
+cat << EOF > "$CONF"
+PHONE='${PHONE}'
+UID_VALUE='${UID_VALUE}'
+CLIENT_ID='6d6bc6f3b5f04107a5fc1c62e39dd5f4'
+SERVICE_NAME='${SERVICE}'
+EOF
+
+chmod 600 "$CONF"
+echo ">> 认证配置已保存至 $CONF:"
+echo "   手机号:   $PHONE"
+echo "   识别号:   $UID_VALUE"
+echo "   运营商:   $SERVICE"
+echo
+echo ">> 正在触发即时登录测试..."
+/usr/bin/portal-login.sh

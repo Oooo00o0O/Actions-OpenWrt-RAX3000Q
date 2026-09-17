@@ -1,0 +1,5 @@
+#!/bin/sh
+[ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "wan" ] && {
+    gw=$(ip route show default dev eth0 2>/dev/null | awk '{print $3}')
+    [ -n "$gw" ] && ip route change default via "$gw" dev eth0 rto_min 200ms
+}

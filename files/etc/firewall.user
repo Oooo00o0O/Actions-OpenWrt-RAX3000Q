@@ -1,0 +1,20 @@
+# Custom firewall rules
+
+# 1. TTL 64 (eth0 为 WAN 物理口，光猫减 1 后出公网为 63)
+while iptables -t mangle -D POSTROUTING -o eth0 -j TTL --ttl-set 64 2>/dev/null; do :; done
+iptables -t mangle -A POSTROUTING -o eth0 -j TTL --ttl-set 64
+
+# 2. TCP SYN retries 调优 (防晚高峰 TCP 内存墙)
+sysctl -w net.ipv4.tcp_syn_retries=4 2>/dev/null || true
+
+# 3. 绕过 HTTPS 443
+while iptables -t mangle -D PREROUTING -p tcp --dport 443 -j ACCEPT 2>/dev/null; do :; done
+iptables -t mangle -I PREROUTING 1 -p tcp --dport 443 -j ACCEPT
+
+# 4. rto_min 200ms 双保险
+gw=$(ip route show default dev eth0 2>/dev/null | awk '{print $3}')
+[ -n "$gw" ] && ip route change default via "$gw" dev eth0 rto_min 200ms 2>/dev/null || true
+
+# 5. 阻断出站 QUIC / HTTP3 (UDP 443)，迫使客户端回退到 TCP 以便 UA2F 改写
+while iptables -D FORWARD -p udp --dport 443 -j DROP 2>/dev/null; do :; done
+iptables -I FORWARD 1 -p udp --dport 443 -j DROP
