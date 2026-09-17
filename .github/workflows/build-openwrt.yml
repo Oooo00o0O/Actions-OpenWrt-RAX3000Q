@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
+# Copyright (c) 2019-2020 P3TERX https://p3terx.com
 #
 # This is free software, licensed under the MIT License.
 # See /LICENSE for more information.
@@ -10,8 +10,15 @@
 
 name: Build OpenWrt
 
+# Release 需要 contents: write
+# 删除旧 workflow run 需要 actions: write
+permissions:
+  contents: write
+  actions: write
+
 on:
   repository_dispatch:
+
   workflow_dispatch:
     inputs:
       ssh:
@@ -19,233 +26,811 @@ on:
         required: false
         default: 'false'
         type: boolean
+
   schedule:
-    - cron: 0 8 * * 2
+    - cron: '0 8 * * 2'
+
 
 env:
   REPO_URL: https://github.com/kkstone/immortalwrt-ipq50xx
   REPO_BRANCH: openwrt-21.02
+
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
+
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
+
   UPLOAD_BIN_DIR: true
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
+
   TZ: Asia/Shanghai
 
+
 jobs:
+
   build:
+
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
 
-    - name: Initialization environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -n | tail -n 100
-        df -h
-        echo "Removing large packages"
-        sudo apt-get remove -y '^dotnet-.*'
-        sudo apt-get remove -y '^llvm-.*'
-        sudo apt-get remove -y 'php.*'
-        sudo apt-get remove -y '^mongodb-.*'
-        sudo apt-get remove -y '^mysql-.*'
-        sudo apt-get remove -y azure-cli google-cloud-sdk google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri
-        sudo apt-get autoremove -y
-        sudo apt-get clean
-        df -h
-        echo "Removing large directories"
-        sudo rm -rf /usr/share/dotnet/
-        sudo rm -rf /usr/local/graalvm/
-        sudo rm -rf /usr/local/.ghcup/
-        sudo rm -rf /usr/local/share/powershell
-        sudo rm -rf /usr/local/share/chromium
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /usr/local/lib/node_modules
-        df -h
-        sudo -E apt-get -qq update
-        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-          bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
-          g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
-          libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5 \
-          libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lld llvm lrzsz mkisofs msmtp \
-          nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pip python3-ply \
-          python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig \
-          texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+      # ============================================================
+      # Checkout Actions repository
+      # ============================================================
 
-    - name: Clone source code
-      working-directory: /workdir
-      run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Enable build ccache
-      uses: klever1988/cachewrtbuild@main
-      with:
-        ccache: 'true'
-        mixkey: 'immortalwrt21-cortexa7-vfpv4'
-        prefix: ${{ github.workspace }}/openwrt
 
-    - name: Load custom feeds
-      run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
-   
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
+      # ============================================================
+      # Prepare build environment
+      # ============================================================
 
-    - name: Fix golang version
-      run: |
-        cd openwrt
-        rm -rf feeds/packages/lang/golang
-        git clone https://github.com/kenzok8/golang -b 1.25 feeds/packages/lang/golang
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
 
-    - name: Fix nodejs version
-      run: |
-        cd openwrt
-        rm -rf feeds/packages/lang/node
-        git clone https://github.com/sbwml/feeds_packages_lang_node-prebuilt -b packages-24.10 feeds/packages/lang/node
+        run: |
 
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+          echo "========================================="
+          echo "Disk usage before cleanup"
+          echo "========================================="
 
-    - name: Upgrade some network software version
-      run: |
-        cd openwrt
+          dpkg-query -Wf '${Installed-Size}\t${Package}\n' \
+            | sort -n \
+            | tail -n 100 || true
 
-        rm -rf feeds/packages/net/natmap
-        wget -r --no-parent https://cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/natmap/
-        cp -rf cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/natmap feeds/packages/net/natmap/
-        rm -rf cdn.jsdelivr.net
-        find feeds/packages/net/natmap -name index.html -exec rm {} \;
+          df -h
 
-        rm -rf feeds/packages/net/ddns-go
-        wget -r --no-parent https://cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/ddns-go/
-        cp -rf cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/ddns-go feeds/packages/net/ddns-go/
-        rm -rf cdn.jsdelivr.net
-        find feeds/packages/net/ddns-go -name index.html -exec rm {} \;    
 
-        rm -rf feeds/packages/net/frp
-        wget -r --no-parent https://cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/frp/
-        cp -rf cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/frp feeds/packages/net/frp/
-        rm -rf cdn.jsdelivr.net
-        find feeds/packages/net/frp -name index.html -exec rm {} \; 
+          echo "========================================="
+          echo "Removing large packages"
+          echo "========================================="
 
-        wget "https://www.dropbox.com/scl/fi/uccikbibj772c4sekzbk7/luci-app-turboacc.zip?rlkey=yzhkk0lfzhrthn8hbl1qt8k5j&st=31820445&dl=1" -O luci-app-turboacc.zip
-        rm -rf feeds/luci/applications/luci-app-turboacc
-        unzip luci-app-turboacc.zip -d feeds/luci/applications/
-        rm -rf luci-app-turboacc.zip
+          sudo apt-get remove -y '^dotnet-.*' || true
+          sudo apt-get remove -y '^llvm-.*' || true
+          sudo apt-get remove -y 'php.*' || true
+          sudo apt-get remove -y '^mongodb-.*' || true
+          sudo apt-get remove -y '^mysql-.*' || true
 
-    - name: Load custom configuration
-      run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+          sudo apt-get remove -y \
+            azure-cli \
+            google-cloud-sdk \
+            google-chrome-stable \
+            firefox \
+            powershell \
+            mono-devel \
+            libgl1-mesa-dri || true
 
-    - name: SSH connection to Actions
-      uses: P3TERX/ssh2actions@v1.0.0
-      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
-      env:
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          sudo apt-get autoremove -y
+          sudo apt-get clean
 
-    - name: Fix some download failed first
-      run: |
-        cd openwrt
-        mkdir dl
-        wget "https://www.dropbox.com/scl/fi/9ts30p2csnlb9imaf8k68/backports-20210222-5.4-qsdk-11.5.0.5.tar.xz?rlkey=sntbyfjgg86gu2uoocgb9ggp1&st=7w81hl56&dl=1" -O dl/backports-20210222-5.4-qsdk-11.5.0.5.tar.xz
-        wget "https://www.dropbox.com/scl/fi/gu7ge6jmefn72ttuop1zs/linux-5.4-qsdk-11.5.0.5.tar.xz?rlkey=tdpq0ye35x290frbh7i8uqrm8&st=jjvegqrr&dl=1" -O dl/linux-5.4-qsdk-11.5.0.5.tar.xz
 
-    - name: Download package
-      id: package
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+          echo "========================================="
+          echo "Removing large directories"
+          echo "========================================="
 
-    - name: Compile the firmware
-      id: compile
-      run: |
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
+          sudo rm -rf /usr/share/dotnet/
+          sudo rm -rf /usr/local/graalvm/
+          sudo rm -rf /usr/local/.ghcup/
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/lib/node_modules
 
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
 
-    - name: Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+          echo "========================================="
+          echo "Disk usage after cleanup"
+          echo "========================================="
 
-    - name: Upload firmware directory
-      uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+          df -h
 
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        echo "release_tag=RAX3000Q-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@v1
-      if: steps.tag.outputs.status == 'success' && !cancelled()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+          echo "========================================="
+          echo "Install build dependencies"
+          echo "========================================="
 
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 1
-        keep_minimum_runs: 3
+          sudo -E apt-get -qq update
 
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@v0.2.1
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 5
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          sudo apt install -y \
+            ack \
+            antlr3 \
+            asciidoc \
+            autoconf \
+            automake \
+            autopoint \
+            binutils \
+            bison \
+            build-essential \
+            bzip2 \
+            ccache \
+            clang \
+            cmake \
+            cpio \
+            curl \
+            device-tree-compiler \
+            ecj \
+            fastjar \
+            flex \
+            gawk \
+            gettext \
+            gcc-multilib \
+            g++-multilib \
+            git \
+            gnutls-dev \
+            gperf \
+            haveged \
+            help2man \
+            intltool \
+            lib32gcc-s1 \
+            libc6-dev-i386 \
+            libelf-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libltdl-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libncurses5-dev \
+            libncursesw5 \
+            libncursesw5-dev \
+            libpython3-dev \
+            libreadline-dev \
+            libssl-dev \
+            libtool \
+            lld \
+            llvm \
+            lrzsz \
+            mkisofs \
+            msmtp \
+            nano \
+            ninja-build \
+            p7zip \
+            p7zip-full \
+            patch \
+            pkgconf \
+            python2.7 \
+            python3 \
+            python3-pip \
+            python3-ply \
+            python3-pyelftools \
+            qemu-utils \
+            re2c \
+            rsync \
+            scons \
+            squashfs-tools \
+            subversion \
+            swig \
+            texinfo \
+            uglifyjs \
+            upx-ucl \
+            unzip \
+            vim \
+            wget \
+            xmlto \
+            xxd \
+            zlib1g-dev
+
+
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+
+
+          sudo timedatectl set-timezone "$TZ"
+
+          sudo mkdir -p /workdir
+          sudo chown "$USER":"$(id -gn)" /workdir
+
+
+      # ============================================================
+      # Clone kkstone source tree
+      # ============================================================
+
+      - name: Clone source code
+        working-directory: /workdir
+
+        run: |
+
+          echo "========================================="
+          echo "Clone OpenWrt source"
+          echo "========================================="
+
+          df -hT "$PWD"
+
+          git clone \
+            --branch "$REPO_BRANCH" \
+            "$REPO_URL" \
+            openwrt
+
+          ln -sfn \
+            /workdir/openwrt \
+            "$GITHUB_WORKSPACE/openwrt"
+
+
+      # ============================================================
+      # Ccache
+      # ============================================================
+
+      - name: Enable build ccache
+        uses: klever1988/cachewrtbuild@main
+
+        with:
+          ccache: 'true'
+          mixkey: 'immortalwrt21-cortexa7-vfpv4'
+          prefix: ${{ github.workspace }}/openwrt
+
+
+      # ============================================================
+      # Custom feeds.conf / diy-part1
+      # ============================================================
+
+      - name: Load custom feeds
+
+        run: |
+
+          if [ -e "$FEEDS_CONF" ]; then
+            mv "$FEEDS_CONF" openwrt/feeds.conf.default
+          fi
+
+          chmod +x "$DIY_P1_SH"
+
+          cd openwrt
+
+          "$GITHUB_WORKSPACE/$DIY_P1_SH"
+
+
+      # ============================================================
+      # Update feeds
+      # ============================================================
+
+      - name: Update feeds
+
+        run: |
+
+          cd openwrt
+
+          ./scripts/feeds update -a
+
+
+      # ============================================================
+      # Replace old Go
+      #
+      # UA3F 3.6.0 requires Go >= 1.23.
+      # ============================================================
+
+      - name: Fix golang version
+
+        run: |
+
+          cd openwrt
+
+          rm -rf feeds/packages/lang/golang
+
+          git clone \
+            --depth 1 \
+            --branch 1.25 \
+            https://github.com/kenzok8/golang \
+            feeds/packages/lang/golang
+
+
+      # ============================================================
+      # Replace old NodeJS
+      # ============================================================
+
+      - name: Fix nodejs version
+
+        run: |
+
+          cd openwrt
+
+          rm -rf feeds/packages/lang/node
+
+          git clone \
+            --depth 1 \
+            --branch packages-24.10 \
+            https://github.com/sbwml/feeds_packages_lang_node-prebuilt \
+            feeds/packages/lang/node
+
+
+      # ============================================================
+      # Install feeds
+      # ============================================================
+
+      - name: Install feeds
+
+        run: |
+
+          cd openwrt
+
+          ./scripts/feeds install -a
+
+
+      # ============================================================
+      # Upgrade selected network packages
+      # ============================================================
+
+      - name: Upgrade some network software version
+
+        run: |
+
+          set -e
+
+          cd openwrt
+
+
+          echo "========================================="
+          echo "Upgrade natmap"
+          echo "========================================="
+
+          rm -rf feeds/packages/net/natmap
+
+          wget -r \
+            --no-parent \
+            https://cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/natmap/
+
+          cp -rf \
+            cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/natmap \
+            feeds/packages/net/natmap/
+
+          rm -rf cdn.jsdelivr.net
+
+          find feeds/packages/net/natmap \
+            -name index.html \
+            -delete
+
+
+          echo "========================================="
+          echo "Upgrade ddns-go"
+          echo "========================================="
+
+          rm -rf feeds/packages/net/ddns-go
+
+          wget -r \
+            --no-parent \
+            https://cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/ddns-go/
+
+          cp -rf \
+            cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/ddns-go \
+            feeds/packages/net/ddns-go/
+
+          rm -rf cdn.jsdelivr.net
+
+          find feeds/packages/net/ddns-go \
+            -name index.html \
+            -delete
+
+
+          echo "========================================="
+          echo "Upgrade frp"
+          echo "========================================="
+
+          rm -rf feeds/packages/net/frp
+
+          wget -r \
+            --no-parent \
+            https://cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/frp/
+
+          cp -rf \
+            cdn.jsdelivr.net/gh/immortalwrt/packages@master/net/frp \
+            feeds/packages/net/frp/
+
+          rm -rf cdn.jsdelivr.net
+
+          find feeds/packages/net/frp \
+            -name index.html \
+            -delete
+
+
+          echo "========================================="
+          echo "Upgrade luci-app-turboacc"
+          echo "========================================="
+
+          wget \
+            "https://www.dropbox.com/scl/fi/uccikbibj772c4sekzbk7/luci-app-turboacc.zip?rlkey=yzhkk0lfzhrthn8hbl1qt8k5j&st=31820445&dl=1" \
+            -O luci-app-turboacc.zip
+
+          rm -rf feeds/luci/applications/luci-app-turboacc
+
+          unzip \
+            luci-app-turboacc.zip \
+            -d feeds/luci/applications/
+
+          rm -f luci-app-turboacc.zip
+
+
+      # ============================================================
+      # Load .config + run our diy-part2.sh
+      #
+      # diy-part2.sh currently handles:
+      #   UA2F
+      #   UA3F
+      #   UA2F CMake compatibility
+      #   iptables/NFQUEUE/TPROXY
+      #   SQM/CAKE
+      # ============================================================
+
+      - name: Load custom configuration
+
+        run: |
+
+          if [ -e files ]; then
+            mv files openwrt/files
+          fi
+
+          if [ -e "$CONFIG_FILE" ]; then
+            mv "$CONFIG_FILE" openwrt/.config
+          fi
+
+          chmod +x "$DIY_P2_SH"
+
+          cd openwrt
+
+          "$GITHUB_WORKSPACE/$DIY_P2_SH"
+
+
+      # ============================================================
+      # Optional SSH debug
+      # ============================================================
+
+      - name: SSH connection to Actions
+        uses: P3TERX/ssh2actions@v1.0.0
+
+        if: >
+          (github.event.inputs.ssh == 'true' &&
+           github.event.inputs.ssh != 'false') ||
+          contains(github.event.action, 'ssh')
+
+        env:
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+
+      # ============================================================
+      # QSDK kernel/backports files
+      # ============================================================
+
+      - name: Fix some download failed first
+
+        run: |
+
+          set -e
+
+          cd openwrt
+
+          mkdir -p dl
+
+
+          echo "========================================="
+          echo "Download QSDK backports"
+          echo "========================================="
+
+          wget \
+            "https://www.dropbox.com/scl/fi/9ts30p2csnlb9imaf8k68/backports-20210222-5.4-qsdk-11.5.0.5.tar.xz?rlkey=sntbyfjgg86gu2uoocgb9ggp1&st=7w81hl56&dl=1" \
+            -O dl/backports-20210222-5.4-qsdk-11.5.0.5.tar.xz
+
+
+          echo "========================================="
+          echo "Download QSDK kernel"
+          echo "========================================="
+
+          wget \
+            "https://www.dropbox.com/scl/fi/gu7ge6jmefn72ttuop1zs/linux-5.4-qsdk-11.5.0.5.tar.xz?rlkey=tdpq0ye35x290frbh7i8uqrm8&st=jjvegqrr&dl=1" \
+            -O dl/linux-5.4-qsdk-11.5.0.5.tar.xz
+
+
+      # ============================================================
+      # Resolve .config and download source packages
+      # ============================================================
+
+      - name: Download package
+        id: package
+
+        run: |
+
+          set -e
+
+          cd openwrt
+
+
+          echo "========================================="
+          echo "make defconfig"
+          echo "========================================="
+
+          make defconfig
+
+
+          echo "========================================="
+          echo "Selected custom packages"
+          echo "========================================="
+
+          grep -E \
+            '^CONFIG_PACKAGE_(ua2f|ua3f|ip-full|ipset|iptables-mod-(nfqueue|tproxy|conntrack-extra|filter|ipopt)|kmod-nfnetlink-queue|kmod-nf-conntrack-netlink|sqm-scripts|luci-app-sqm|kmod-sched-cake|tc-full)=y' \
+            .config || true
+
+
+          echo "========================================="
+          echo "Download sources"
+          echo "========================================="
+
+          make download -j8
+
+
+          echo "========================================="
+          echo "Remove invalid small downloads"
+          echo "========================================="
+
+          find dl \
+            -type f \
+            -size -1024c \
+            -exec ls -lh {} \;
+
+          find dl \
+            -type f \
+            -size -1024c \
+            -delete
+
+
+      # ============================================================
+      # Compile
+      # ============================================================
+
+      - name: Compile the firmware
+        id: compile
+
+        run: |
+
+          set -e
+
+          cd openwrt
+
+
+          echo "========================================="
+          echo "Compile using $(nproc) threads"
+          echo "========================================="
+
+
+          if ! make -j"$(nproc)"; then
+
+            echo
+            echo "========================================="
+            echo "Parallel build failed."
+            echo "Retry with single thread."
+            echo "========================================="
+
+            if ! make -j1; then
+
+              echo
+              echo "========================================="
+              echo "Single-thread build failed."
+              echo "Retry with verbose output."
+              echo "========================================="
+
+              make -j1 V=s
+
+            fi
+
+          fi
+
+
+          echo "========================================="
+          echo "Build completed successfully"
+          echo "========================================="
+
+
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config \
+            | sed -r 's/.*DEVICE_(.*)=y/\1/' \
+            > DEVICE_NAME
+
+
+          if [ -s DEVICE_NAME ]; then
+
+            echo "DEVICE_NAME=_$(cat DEVICE_NAME)" \
+              >> "$GITHUB_ENV"
+
+          fi
+
+
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" \
+            >> "$GITHUB_ENV"
+
+
+      # ============================================================
+      # Always show disk usage, even when build fails
+      # ============================================================
+
+      - name: Check space usage
+        if: always()
+
+        run: |
+
+          df -hT
+
+
+      # ============================================================
+      # Upload complete bin directory
+      #
+      # ONLY when compilation succeeded.
+      # ============================================================
+
+      - name: Upload bin directory
+        uses: actions/upload-artifact@v7
+
+        if: >
+          success() &&
+          steps.compile.outputs.status == 'success' &&
+          env.UPLOAD_BIN_DIR == 'true'
+
+        with:
+
+          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+
+          path: openwrt/bin
+
+
+      # ============================================================
+      # Prepare target firmware files
+      # ============================================================
+
+      - name: Organize files
+        id: organize
+
+        if: >
+          success() &&
+          steps.compile.outputs.status == 'success' &&
+          env.UPLOAD_FIRMWARE == 'true'
+
+        run: |
+
+          set -e
+
+          cd openwrt/bin/targets/*/*
+
+
+          echo "========================================="
+          echo "Firmware directory"
+          echo "========================================="
+
+          pwd
+
+          ls -lah
+
+
+          rm -rf packages
+
+
+          echo "FIRMWARE=$PWD" \
+            >> "$GITHUB_ENV"
+
+          echo "status=success" \
+            >> "$GITHUB_OUTPUT"
+
+
+      # ============================================================
+      # Upload firmware artifact
+      # ============================================================
+
+      - name: Upload firmware directory
+        uses: actions/upload-artifact@v7
+
+        if: >
+          success() &&
+          steps.organize.outputs.status == 'success'
+
+        with:
+
+          name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+
+          path: ${{ env.FIRMWARE }}
+
+
+      # ============================================================
+      # Create release tag
+      #
+      # Build MUST have completed successfully.
+      # ============================================================
+
+      - name: Generate release tag
+        id: tag
+
+        if: >
+          success() &&
+          steps.organize.outputs.status == 'success' &&
+          env.UPLOAD_RELEASE == 'true'
+
+        run: |
+
+          echo \
+            "release_tag=RAX3000Q-$(date +"%Y.%m.%d-%H%M")" \
+            >> "$GITHUB_OUTPUT"
+
+
+          cat > release.txt <<EOF
+          RAX3000Q / RAX3000QY custom OpenWrt build
+
+          Base:
+          kkstone/immortalwrt-ipq50xx
+          openwrt-21.02
+          Linux 5.4 QSDK 11.5
+
+          Custom components:
+          - Qualcomm NSS
+          - ath11k
+          - UA2F
+          - UA3F
+          - iptables / NFQUEUE / TPROXY
+          - CAKE
+          - SQM
+          EOF
+
+
+          echo "status=success" \
+            >> "$GITHUB_OUTPUT"
+
+
+      # ============================================================
+      # Publish GitHub Release
+      # ============================================================
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v3
+
+        if: >
+          success() &&
+          steps.tag.outputs.status == 'success'
+
+        with:
+
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+
+          body_path: release.txt
+
+          files: |
+            ${{ env.FIRMWARE }}/*
+
+          fail_on_unmatched_files: true
+
+
+      # ============================================================
+      # Delete old workflow runs
+      # ============================================================
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+
+        if: success()
+
+        with:
+
+          token: ${{ github.token }}
+
+          repository: ${{ github.repository }}
+
+          retain_days: 1
+
+          keep_minimum_runs: 3
+
+
+      # ============================================================
+      # Delete old releases
+      # ============================================================
+
+      - name: Remove old Releases
+        uses: dev-drprasad/delete-older-releases@v0.2.1
+
+        if: >
+          success() &&
+          env.UPLOAD_RELEASE == 'true'
+
+        with:
+
+          keep_latest: 5
+
+          delete_tags: true
+
+        env:
+
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
