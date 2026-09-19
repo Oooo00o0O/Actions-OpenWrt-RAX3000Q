@@ -5,11 +5,9 @@ uci set network.wan.hostname='*'
 uci set network.wan.mtu='1492'
 uci set network.wan.peerdns='0'
 uci -q delete network.wan.dns
-uci add_list network.wan.dns='223.5.5.5'
-uci add_list network.wan.dns='223.6.6.6'
-uci add_list network.wan.dns='119.29.29.29'
-uci add_list network.wan.dns='119.28.28.28'
 uci add_list network.wan.dns='8.8.8.8'
+uci add_list network.wan.dns='223.5.5.5'
+uci add_list network.wan.dns='119.29.29.29'
 uci set network.wan.ipv6='0'
 uci set network.wan.delegate='0'
 
@@ -43,11 +41,11 @@ uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].mini_ttl
 uci -q delete dhcp.@dnsmasq[0].min_ttl
 uci -q delete dhcp.@dnsmasq[0].server
+uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
 uci add_list dhcp.@dnsmasq[0].server='223.5.5.5'
 uci add_list dhcp.@dnsmasq[0].server='223.6.6.6'
 uci add_list dhcp.@dnsmasq[0].server='119.29.29.29'
 uci add_list dhcp.@dnsmasq[0].server='119.28.28.28'
-uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
 uci set dhcp.lan.dhcpv6='disabled'
 uci set dhcp.lan.ra='disabled'
 uci set dhcp.lan.ndp='disabled'
