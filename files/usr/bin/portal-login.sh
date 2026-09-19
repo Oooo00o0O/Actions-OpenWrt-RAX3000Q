@@ -28,8 +28,8 @@ echo "[1/4] 获取当前 Portal 参数..."
 
 BOOT_HTML="$(
     curl --http1.1 -sS \
-        --connect-timeout 5 \
-        --max-time 10 \
+        --connect-timeout 8 \
+        --max-time 15 \
         "$BOOT_URL"
 )" || {
     echo "无法访问 Portal 探测地址" >&2
@@ -66,8 +66,8 @@ REDIRECT_URI="${PORTAL_ORIGIN}/eportal/login_sso.jsp%3F${QUERY}"
 # 尝试从 ePortal 的 302 重定向中动态提取中心 SSO 的 client_id (有兜底)
 DYN_LOC="$(
     curl -sS -I \
-        --connect-timeout 4 \
-        --max-time 8 \
+        --connect-timeout 8 \
+        --max-time 15 \
         "$INDEX_URL" 2>/dev/null |
     sed -n 's/^[Ll]ocation:[[:space:]]*//p' |
     tr -d '\r'
@@ -83,9 +83,9 @@ fi
 echo "[2/4] 获取 SSO token..."
 
 LOGIN_JSON="$(
-    curl -fsS \
-        --connect-timeout 5 \
-        --max-time 10 \
+    curl -fsSk \
+        --connect-timeout 10 \
+        --max-time 20 \
         "${SSO_API}/ac/auth/loginByPhoneAndUid" \
         -H 'Accept: application/json' \
         -H 'Content-Type: application/json' \
@@ -112,9 +112,9 @@ fi
 echo "[3/4] 获取本次 ePortal 登录 URL..."
 
 OAUTH_JSON="$(
-    curl -fsS -G \
-        --connect-timeout 5 \
-        --max-time 10 \
+    curl -fsSk -G \
+        --connect-timeout 10 \
+        --max-time 20 \
         "${SSO_API}/ac/auth/oauthRedirect" \
         -H 'Accept: application/json' \
         -H 'Origin: https://broadband.215123.cn' \
@@ -150,8 +150,8 @@ HDR="/tmp/portal-login.headers.$$"
 trap 'rm -f "$HDR"' EXIT INT TERM
 
 curl -sS \
-    --connect-timeout 5 \
-    --max-time 10 \
+    --connect-timeout 10 \
+    --max-time 20 \
     -D "$HDR" \
     -o /dev/null \
     "$LOGIN_URL" || {

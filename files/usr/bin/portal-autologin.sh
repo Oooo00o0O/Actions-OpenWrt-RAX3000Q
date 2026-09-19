@@ -21,17 +21,27 @@ echo "$now" > "$LOCK"
 SEEN=0
 HIJACK=0
 for P in "$PROBE1" "$PROBE2"; do
-  BODY=$(curl --http1.1 -sS --connect-timeout 4 --max-time 8 "$P" 2>/dev/null)
+  RESP=$(curl --http1.1 -sS -i --connect-timeout 5 --max-time 10 "$P" 2>/dev/null)
   [ $? -eq 0 ] && SEEN=1
-  case "$BODY" in
+  # 从响应中提取服务器 Date 头，若刚开机未对时可先做秒级时间对齐
+  HDATE=$(printf '%s\n' "$RESP" | sed -n 's/^[Dd]ate:[[:space:]]*//p' | tr -d '\r' | head -n 1)
+  if [ -n "$HDATE" ]; then
+    date -u -D "%a, %d %b %Y %H:%M:%S GMT" -s "$HDATE" >/dev/null 2>&1
+    now=$(date +%s)
+  fi
+  case "$RESP" in
     *eportal/index.jsp*) HIJACK=1; break ;;
   esac
 done
 
 if [ "$HIJACK" -eq 0 ]; then
-  if [ "$SEEN" -eq 1 ] && [ ! -f "$BASE" ]; then
-    echo "$now" > "$BASE"
-    echo "[$(date '+%F %T')] BASELINE 会话起点(近似)" >> "$LOG"
+  if [ "$SEEN" -eq 1 ]; then
+    ntpd -q -p ntp.aliyun.com >/dev/null 2>&1 || true
+    now=$(date +%s)
+    if [ ! -f "$BASE" ]; then
+      echo "$now" > "$BASE"
+      echo "[$(date '+%F %T')] BASELINE 会话起点(近似)" >> "$LOG"
+    fi
   fi
   exit 0
 fi
@@ -39,7 +49,7 @@ fi
 if [ -f "$STATE" ]; then
   last=$(cat "$STATE" 2>/dev/null)
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
-  [ $((now - last)) -lt 600 ] && exit 0
+  [ $((now - last)) -lt 300 ] && exit 0
 fi
 
 # 日志体积保护
@@ -67,10 +77,11 @@ U3=$(uci -q get ua3f.enabled.enabled 2>/dev/null)
   echo "  UA=${UA}"
   if /usr/bin/portal-login.sh; then
     rm -f "$STATE"
+    ntpd -q -p ntp.aliyun.com >/dev/null 2>&1 || true
     date +%s > "$BASE"
     echo "  -> 重新登录成功，会话起点已重置"
   else
     date +%s > "$STATE"
-    echo "  -> 登录失败(惩戒期?)，10 分钟后再试"
+    echo "  -> 登录失败(惩戒期?)，5 分钟后再试"
   fi
 } >> "$LOG" 2>&1
