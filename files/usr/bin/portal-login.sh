@@ -24,10 +24,14 @@ need_cmd curl
 need_cmd jsonfilter
 need_cmd sed
 
+UA="$(uci -q get ua2f.main.custom_ua 2>/dev/null)"
+[ -z "$UA" ] && UA='Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0'
+
 echo "[1/4] 获取当前 Portal 参数..."
 
 BOOT_HTML="$(
     curl --http1.1 -sS \
+        -A "$UA" \
         --connect-timeout 8 \
         --max-time 15 \
         "$BOOT_URL"
@@ -66,6 +70,7 @@ REDIRECT_URI="${PORTAL_ORIGIN}/eportal/login_sso.jsp%3F${QUERY}"
 # 尝试从 ePortal 的 302 重定向中动态提取中心 SSO 的 client_id (有兜底)
 DYN_LOC="$(
     curl -sS -I \
+        -A "$UA" \
         --connect-timeout 8 \
         --max-time 15 \
         "$INDEX_URL" 2>/dev/null |
@@ -84,6 +89,7 @@ echo "[2/4] 获取 SSO token..."
 
 LOGIN_JSON="$(
     curl -fsSk \
+        -A "$UA" \
         --connect-timeout 10 \
         --max-time 20 \
         "${SSO_API}/ac/auth/loginByPhoneAndUid" \
@@ -113,6 +119,7 @@ echo "[3/4] 获取本次 ePortal 登录 URL..."
 
 OAUTH_JSON="$(
     curl -fsSk -G \
+        -A "$UA" \
         --connect-timeout 10 \
         --max-time 20 \
         "${SSO_API}/ac/auth/oauthRedirect" \
@@ -150,6 +157,7 @@ HDR="/tmp/portal-login.headers.$$"
 trap 'rm -f "$HDR"' EXIT INT TERM
 
 curl -sS \
+    -A "$UA" \
     --connect-timeout 10 \
     --max-time 20 \
     -D "$HDR" \
