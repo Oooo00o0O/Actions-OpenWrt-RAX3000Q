@@ -20,8 +20,11 @@ echo "$now" > "$LOCK"
 # curl 退出码 0 = 拿到完整响应（204 空体也算）=> 有网
 SEEN=0
 HIJACK=0
+UA=$(uci -q get ua2f.main.custom_ua 2>/dev/null)
+[ -z "$UA" ] && UA='Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0'
+
 for P in "$PROBE1" "$PROBE2"; do
-  RESP=$(curl --http1.1 -sS -i --connect-timeout 5 --max-time 10 "$P" 2>/dev/null)
+  RESP=$(curl --http1.1 -sS -i -A "$UA" --connect-timeout 5 --max-time 10 "$P" 2>/dev/null)
   [ $? -eq 0 ] && SEEN=1
   # 从响应中提取服务器 Date 头，若刚开机未对时可先做秒级时间对齐
   HDATE=$(printf '%s\n' "$RESP" | sed -n 's/^[Dd]ate:[[:space:]]*//p' | tr -d '\r' | head -n 1)
