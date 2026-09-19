@@ -4,8 +4,8 @@ LOG=/etc/portal-stats.log
 STATE=/tmp/portal-autologin.lastfail
 BASE=/etc/portal-session-start.ts
 LOCK=/tmp/portal-autologin.lock
-PROBE1='http://123.123.123.123/'
-PROBE2='http://connect.rom.miui.com/generate_204'
+PROBE1='http://connect.rom.miui.com/generate_204'
+PROBE2='http://123.123.123.123/'
 
 now=$(date +%s)
 
@@ -33,7 +33,15 @@ for P in "$PROBE1" "$PROBE2"; do
     now=$(date +%s)
   fi
   case "$RESP" in
-    *eportal/index.jsp*) HIJACK=1; break ;;
+    *eportal/index.jsp*)
+      HIJACK=1
+      break
+      ;;
+    *"204 No Content"*)
+      # 正常在线，直接退出探测循环，避免额外等待
+      HIJACK=0
+      break
+      ;;
   esac
 done
 

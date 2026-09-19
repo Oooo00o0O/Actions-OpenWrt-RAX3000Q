@@ -3,7 +3,7 @@
 set -u
 
 CONF='/etc/portal-login.conf'
-BOOT_URL='http://123.123.123.123/'
+BOOT_URLS='http://connect.rom.miui.com/generate_204 http://123.123.123.123/'
 SSO_API='https://api.215123.cn'
 
 [ -r "$CONF" ] || {
@@ -29,13 +29,19 @@ UA="$(uci -q get ua2f.main.custom_ua 2>/dev/null)"
 
 echo "[1/4] 获取当前 Portal 参数..."
 
-BOOT_HTML="$(
-    curl --http1.1 -sS \
-        -A "$UA" \
-        --connect-timeout 8 \
-        --max-time 15 \
-        "$BOOT_URL"
-)" || {
+BOOT_HTML=""
+for U in $BOOT_URLS; do
+    BOOT_HTML="$(
+        curl --http1.1 -sS \
+            -A "$UA" \
+            --connect-timeout 8 \
+            --max-time 15 \
+            "$U" 2>/dev/null
+    )"
+    [ -n "$BOOT_HTML" ] && case "$BOOT_HTML" in *location.href*) break ;; esac
+done
+
+[ -n "$BOOT_HTML" ] || {
     echo "无法访问 Portal 探测地址" >&2
     exit 2
 }
