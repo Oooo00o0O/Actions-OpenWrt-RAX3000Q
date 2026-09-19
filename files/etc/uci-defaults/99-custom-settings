@@ -25,6 +25,7 @@ uci -q delete network.eth0
 uci set network.eth0=device
 uci set network.eth0.name='eth0'
 uci set network.eth0.mtu='1492'
+[ -n "$GEN_MAC" ] && uci set network.eth0.macaddr="$GEN_MAC"
 
 uci set network.wan6.auto='0'
 uci set network.lan.ip6assign='0'
