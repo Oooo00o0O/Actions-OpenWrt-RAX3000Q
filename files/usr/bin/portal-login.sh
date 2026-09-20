@@ -31,18 +31,27 @@ echo "[1/4] 获取当前 Portal 参数..."
 
 BOOT_HTML=""
 for U in $BOOT_URLS; do
-    BOOT_HTML="$(
-        curl --http1.1 -sS \
+    RESP="$(
+        curl --http1.1 -sS -i \
             -A "$UA" \
-            --connect-timeout 8 \
-            --max-time 15 \
+            --connect-timeout 5 \
+            --max-time 10 \
             "$U" 2>/dev/null
     )"
-    [ -n "$BOOT_HTML" ] && case "$BOOT_HTML" in *location.href*) break ;; esac
+    case "$RESP" in
+        *"204 No Content"*)
+            echo "网络已正常在线（未被 Portal 拦截），无需登录。"
+            exit 0
+            ;;
+        *location.href*|*eportal/index.jsp*)
+            BOOT_HTML="$RESP"
+            break
+            ;;
+    esac
 done
 
 [ -n "$BOOT_HTML" ] || {
-    echo "无法访问 Portal 探测地址" >&2
+    echo "无法访问 Portal 探测地址（可能未连接网线或网关不可达）" >&2
     exit 2
 }
 
@@ -182,6 +191,8 @@ LOCATION="$(
 case "$LOCATION" in
     *'/success.jsp?'*)
         echo "认证成功。"
+        cp -f "$CONF" /etc/portal-active.conf 2>/dev/null || true
+        rm -f /tmp/portal-autologin.* 2>/dev/null || true
         exit 0
         ;;
 

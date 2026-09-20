@@ -2,6 +2,7 @@
 # 被劫持才登录。记录会话存活时长 + 被踢现场快照。日志超 64KB 自动截断。
 LOG=/etc/portal-stats.log
 STATE=/tmp/portal-autologin.lastfail
+FAILCOUNT=/tmp/portal-autologin.failcount
 BASE=/etc/portal-session-start.ts
 LOCK=/tmp/portal-autologin.lock
 PROBE1='http://connect.rom.miui.com/generate_204'
@@ -60,7 +61,19 @@ fi
 if [ -f "$STATE" ]; then
   last=$(cat "$STATE" 2>/dev/null)
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
-  [ $((now - last)) -lt 300 ] && exit 0
+  cnt=$(cat "$FAILCOUNT" 2>/dev/null)
+  case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+
+  if [ "$cnt" -ge 5 ]; then
+    cooldown=3600
+  elif [ "$cnt" -ge 3 ]; then
+    cooldown=900
+  else
+    cooldown=300
+  fi
+
+  diff=$((now - last))
+  [ "$diff" -ge 0 ] && [ "$diff" -lt "$cooldown" ] && exit 0
 fi
 
 # 日志体积保护
@@ -87,12 +100,20 @@ U3=$(uci -q get ua3f.enabled.enabled 2>/dev/null)
   echo "  路由运行=${UP}s DHCP租约=${LEASES}个 TTL规则=${TTLN} ua2f=${U2} ua3f=${U3}"
   echo "  UA=${UA}"
   if /usr/bin/portal-login.sh; then
-    rm -f "$STATE"
+    rm -f "$STATE" "$FAILCOUNT"
     ntpd -q -p ntp.aliyun.com >/dev/null 2>&1 || true
     date +%s > "$BASE"
     echo "  -> 重新登录成功，会话起点已重置"
   else
     date +%s > "$STATE"
-    echo "  -> 登录失败(惩戒期?)，5 分钟后再试"
+    cnt=$(cat "$FAILCOUNT" 2>/dev/null)
+    case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+    cnt=$((cnt + 1))
+    echo "$cnt" > "$FAILCOUNT"
+    if [ "$cnt" -ge 5 ]; then
+      echo "  -> 连续登录失败 ${cnt} 次，触发熔断保护（进入 1 小时长冷却）。请检查宽带欠费或运营商配置；修改 set-portal 可立即恢复"
+    else
+      echo "  -> 登录失败(第 ${cnt} 次)，等待冷却重试"
+    fi
   fi
 } >> "$LOG" 2>&1

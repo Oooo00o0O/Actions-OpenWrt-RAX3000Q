@@ -1,46 +1,109 @@
 #!/bin/sh
-# 快速配置校园网认证凭据
-# 用法: set-portal <手机号> <身份证后8位> [移动|电信|联通]
+# 快速配置校园网认证凭据并登录
+# 用法: set-portal <手机号> <身份证后8位> [移动|电信|联通] [-f|--force]
 # 示例: set-portal 13812345678 12345678 移动
 
-PHONE="$1"
-UID_VALUE="$2"
-SERVICE="${3:-chinaMobile}"
+FORCE=0
+ARGS=""
+for arg in "$@"; do
+    case "$arg" in
+        -f|--force) FORCE=1 ;;
+        *) ARGS="${ARGS:+${ARGS} }${arg}" ;;
+    esac
+done
+set -- $ARGS
 
-if [ -z "$PHONE" ] || [ -z "$UID_VALUE" ]; then
+TARGET_PHONE="${1:-}"
+TARGET_UID="${2:-}"
+RAW_SERVICE="${3:-chinaMobile}"
+
+if [ -z "$TARGET_PHONE" ] || [ -z "$TARGET_UID" ]; then
     echo "========================================================"
-    echo "用法: set-portal <手机号> <身份证后8位> [运营商]"
+    echo "用法: set-portal <手机号> <身份证后8位> [运营商] [-f|--force]"
     echo "运营商可选: 移动(chinaMobile) / 电信(chinaTelecom) / 联通(chinaUnicom)"
     echo "示例: set-portal 13912345678 12345678 电信"
+    echo "说明: 账号变更时自动刷新 WAN MAC 并重启网络切号；相同账号不刷 MAC"
     echo "========================================================"
     exit 1
 fi
 
-case "$SERVICE" in
-    chinaMobile|移动)   SERVICE="chinaMobile" ;;
-    chinaTelecom|电信)  SERVICE="chinaTelecom" ;;
-    chinaUnicom|联通)   SERVICE="chinaUnicom" ;;
+case "$RAW_SERVICE" in
+    chinaMobile|移动)   TARGET_SERVICE="chinaMobile" ;;
+    chinaTelecom|电信)  TARGET_SERVICE="chinaTelecom" ;;
+    chinaUnicom|联通)   TARGET_SERVICE="chinaUnicom" ;;
     *)
-        echo "错误: 未知运营商 '$SERVICE'"
+        echo "错误: 未知运营商 '$RAW_SERVICE'"
         echo "支持列表: 移动(chinaMobile)、电信(chinaTelecom)、联通(chinaUnicom)"
         exit 1
         ;;
 esac
 
 CONF="/etc/portal-login.conf"
-cat << EOF > "$CONF"
-PHONE='${PHONE}'
-UID_VALUE='${UID_VALUE}'
-CLIENT_ID='6d6bc6f3b5f04107a5fc1c62e39dd5f4'
-SERVICE_NAME='${SERVICE}'
-EOF
+ACTIVE_CONF="/etc/portal-active.conf"
 
+# 读取当前在线/已认证的账号（优先 active，其次 login.conf）
+CUR_PHONE=""
+CUR_UID=""
+CUR_SERVICE=""
+if [ -r "$ACTIVE_CONF" ]; then
+    PHONE="" UID_VALUE="" SERVICE_NAME=""
+    . "$ACTIVE_CONF"
+    CUR_PHONE="${PHONE:-}"
+    CUR_UID="${UID_VALUE:-}"
+    CUR_SERVICE="${SERVICE_NAME:-}"
+elif [ -r "$CONF" ]; then
+    PHONE="" UID_VALUE="" SERVICE_NAME=""
+    . "$CONF"
+    CUR_PHONE="${PHONE:-}"
+    CUR_UID="${UID_VALUE:-}"
+    CUR_SERVICE="${SERVICE_NAME:-}"
+fi
+
+# 保存目标配置
+cat << EOF > "$CONF"
+PHONE='${TARGET_PHONE}'
+UID_VALUE='${TARGET_UID}'
+CLIENT_ID='6d6bc6f3b5f04107a5fc1c62e39dd5f4'
+SERVICE_NAME='${TARGET_SERVICE}'
+EOF
 chmod 600 "$CONF"
 sync
-echo ">> 认证配置已保存至 $CONF:"
-echo "   手机号:   $PHONE"
-echo "   识别号:   $UID_VALUE"
-echo "   运营商:   $SERVICE"
-echo
-echo ">> 正在触发即时登录测试..."
+
+echo ">> 认证配置已更新 ($CONF):"
+echo "   手机号:   $TARGET_PHONE"
+echo "   识别号:   $TARGET_UID"
+echo "   运营商:   $TARGET_SERVICE"
+
+NEED_MAC_RESET=0
+if [ "$FORCE" -eq 1 ]; then
+    echo ">> [强制模式] 强制刷新 WAN MAC 并重连..."
+    NEED_MAC_RESET=1
+elif [ "$TARGET_PHONE" != "$CUR_PHONE" ] || [ "$TARGET_UID" != "$CUR_UID" ] || [ "$TARGET_SERVICE" != "$CUR_SERVICE" ]; then
+    echo ">> 检测到账号变更 [${CUR_PHONE:-未记录}] -> [$TARGET_PHONE]，需重置 WAN MAC 切换认证会话"
+    NEED_MAC_RESET=1
+else
+    echo ">> 账号与当前在线配置一致，无需重置 MAC。"
+fi
+
+if [ "$NEED_MAC_RESET" -eq 1 ]; then
+    RAND=$(hexdump -n 3 -e '/1 ":%02x"' /dev/urandom)
+    NEW_MAC="9a:bc:0d${RAND}"
+    echo ">> 正在更换 WAN MAC 为: $NEW_MAC ..."
+    uci set network.wan.macaddr="$NEW_MAC"
+    uci set network.eth0.macaddr="$NEW_MAC"
+    uci commit network
+    sync
+    rm -f /tmp/portal-autologin.*
+    echo ">> 重启网络接口，等待上游分配 IP..."
+    /etc/init.d/network restart
+    for i in $(seq 1 15); do
+        sleep 1
+        IP=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.ipv4-address[0].address' 2>/dev/null)
+        [ -n "$IP" ] && break
+    done
+    [ -n "$IP" ] && echo ">> WAN 已就绪 (IP: $IP)"
+    sleep 2
+fi
+
+echo ">> 触发登录测试..."
 /usr/bin/portal-login.sh
