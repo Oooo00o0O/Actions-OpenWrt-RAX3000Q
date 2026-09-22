@@ -1,3 +1,3 @@
-ath11k nss_offload=1
+ath11k nss_offload=0
 ath11k_ahb
 ath11k_pci
