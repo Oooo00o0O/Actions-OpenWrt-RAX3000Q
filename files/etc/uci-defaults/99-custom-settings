@@ -6,8 +6,6 @@ uci set network.wan.mtu='1492'
 uci set network.wan.peerdns='0'
 uci -q delete network.wan.dns
 uci add_list network.wan.dns='8.8.8.8'
-uci add_list network.wan.dns='223.5.5.5'
-uci add_list network.wan.dns='119.29.29.29'
 uci set network.wan.ipv6='0'
 uci set network.wan.delegate='0'
 

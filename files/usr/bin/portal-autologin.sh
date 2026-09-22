@@ -54,6 +54,27 @@ if [ "$HIJACK" -eq 0 ]; then
       echo "$now" > "$BASE"
       echo "[$(date '+%F %T')] BASELINE 会话起点(近似)" >> "$LOG"
     fi
+
+    # 在线时定期（每小时）校验 SSO 域名公网 IP，若发生变更则自动持久化同步至 /etc/hosts
+    H_TS=/tmp/portal-hosts.ts
+    last_hts=$(cat "$H_TS" 2>/dev/null || echo 0)
+    case "$last_hts" in ''|*[!0-9]*) last_hts=0 ;; esac
+    if [ $((now - last_hts)) -ge 3600 ]; then
+      echo "$now" > "$H_TS"
+      NEW_IP=$(nslookup api.215123.cn 8.8.8.8 2>/dev/null | awk '/^Address 1: / {print $3; exit}')
+      case "$NEW_IP" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+          CUR_IP=$(awk '/api.215123.cn/ {print $1; exit}' /etc/hosts 2>/dev/null)
+          if [ "$NEW_IP" != "$CUR_IP" ]; then
+            sed -i '/api.215123.cn/d' /etc/hosts
+            echo "$NEW_IP api.215123.cn broadband.215123.cn" >> /etc/hosts
+            sync
+            /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+            echo "[$(date '+%F %T')] DNS_SYNC 更新认证域名 IP: ${CUR_IP:-无} -> $NEW_IP (持久化完成)" >> "$LOG"
+          fi
+          ;;
+      esac
+    fi
   fi
   exit 0
 fi
