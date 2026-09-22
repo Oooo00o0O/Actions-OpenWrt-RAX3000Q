@@ -147,4 +147,9 @@ uci commit network
 # 10. 预置系统默认管理员密码为 password (WebUI 与 SSH 统一)
 echo "root:password" | chpasswd 2>/dev/null || (echo -e "password\npassword" | passwd root 2>/dev/null) || true
 
+# 11. 校园网认证 SSO 域名直连静态解析 (防冷启动未认证时公网 DNS 丢包卡死)
+grep -q "api.215123.cn" /etc/hosts 2>/dev/null || {
+    echo "58.210.96.145 api.215123.cn broadband.215123.cn" >> /etc/hosts
+}
+
 exit 0
