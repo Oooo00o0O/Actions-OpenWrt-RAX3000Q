@@ -200,6 +200,15 @@ cfg_y CONFIG_PACKAGE_luci-app-sqm
 cfg_n CONFIG_PACKAGE_kmod-qca-nss-drv-qdisc
 
 
+# ==========================================================
+# ath11k Wi-Fi NSS Offload (kmod autoload 参数注入)
+# ==========================================================
+
+if [ -f "package/kernel/mac80211/ath.mk" ]; then
+    sed -i '/AutoProbe,ath11k/a \ \ MODPARAMS.ath11k:=nss_offload=1' package/kernel/mac80211/ath.mk
+fi
+
+
 # 新增 package 后强制 OpenWrt 重建 metadata
 rm -rf tmp
 

@@ -110,8 +110,10 @@ uci set ua2f.main.disable_connmark='0'
 uci commit ua2f
 
 # 5. WiFi 默认配置
-# 5.1 开启 5GHz 满血 Wi-Fi 6 (非 DFS 信道 44 免雷达等待，默认 SSID: Nwrt_5G，默认密码: password)
-uci set wireless.radio1.channel='44'
+# 5.1 开启 5GHz 满血 Wi-Fi 6 (自动信道 ACS，排除 DFS 雷达信道免开机探测等待，开启 MU-MIMO，默认 SSID: Nwrt_5G，默认密码: password)
+uci set wireless.radio1.channel='auto'
+uci set wireless.radio1.acs_exclude_dfs='1'
+uci set wireless.radio1.mu_beamformer='1'
 uci set wireless.radio1.disabled='0'
 uci set wireless.default_radio1.ssid='Nwrt_5G'
 uci set wireless.default_radio1.encryption='sae-mixed'
