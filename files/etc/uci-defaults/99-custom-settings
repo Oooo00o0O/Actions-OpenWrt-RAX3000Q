@@ -23,7 +23,11 @@ uci -q delete network.eth0
 uci set network.eth0=device
 uci set network.eth0.name='eth0'
 uci set network.eth0.mtu='1492'
+uci set network.eth0.ipv6='0'
 [ -n "$GEN_MAC" ] && uci set network.eth0.macaddr="$GEN_MAC"
+
+# 底层网桥设备 (br-lan) 关闭 IPv6 (彻底对齐 M2，连 Link-Local fe80:: 都不生成)
+uci -q set network.@device[0].ipv6='0'
 
 uci set network.wan6.auto='0'
 uci set network.lan.ip6assign='0'
